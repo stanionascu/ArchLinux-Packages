@@ -1,0 +1,122 @@
+_pkgname=xdna-driver
+pkgbase=xrt
+pkgname=("xrt-npu-git" "xrt-amd${_pkgname}-git")
+pkgdesc="The AMD XDNA Driver (amdxdna.ko) for Linux and XRT SHIM library development.."
+pkgver=r369.8c77428
+pkgrel=1
+
+url="https://github.com/amd/xdna-driver"
+arch=('x86_64')
+license=('custom')
+conflicts=('amdxdna-driver-bin')
+makedepends=('git' 'cmake')
+source=("git+https://github.com/amd/xdna-driver.git"
+        "git+https://github.com/Xilinx/XRT.git"
+        "git+https://github.com/Xilinx/dma_ip_drivers.git"
+        "git+https://github.com/serge1/ELFIO.git"
+        "git+https://github.com/microsoft/GSL.git"
+        "git+https://github.com/Xilinx/aiebu.git"
+        "git+https://github.com/Xilinx/aie-rt.git"
+        "https://gitlab.com/kernel-firmware/drm-firmware/-/raw/amd-ipu-staging/amdnpu/1502_00/npu.sbin.1.5.4.389"
+        "https://gitlab.com/kernel-firmware/drm-firmware/-/raw/amd-ipu-staging/amdnpu/17f0_00/npu.sbin.0.7.22.185"
+        "https://gitlab.com/kernel-firmware/drm-firmware/-/raw/amd-ipu-staging/amdnpu/17f0_10/npu.sbin.1.0.4.73"
+        "https://gitlab.com/kernel-firmware/drm-firmware/-/raw/amd-ipu-staging/amdnpu/17f0_11/npu.sbin.1.0.4.180"
+        "xrt_plugin-amdxdna.install")
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP'
+            '9f7b7e2c3797fbf2adbacb909714099f9ab4101c7201749cd995d46336b7925f'
+            'e87bd717207fa940c502f813e360c712c6d87a53da5358fc1c31efca736ed33a'
+            '93317b2a36ed180d0da1743c6a0ec02291c1f028bb44738143e080f4fbf517e1'
+            'd745c3fb512ddf1e494877e87621bc223c41ad7bd9fe9242b21bb16460246e76'
+            '58712a3cfc3de7aa97b2d52198d0007e159262d413f87f06e066cf4d7a158f87')
+
+prepare() {
+  cd "${_pkgname}"
+  git submodule init
+  git config submodule.xrt.url "$srcdir/XRT"
+  git -c protocol.file.allow=always submodule update
+
+  cd "xrt"
+  git submodule init
+  git config submodule.src/runtime_src/core/pcie/driver/linux/xocl/lib/libqdma.url "$srcdir/dma_ip_drivers"
+  git config submodule.src/runtime_src/core/common/elf.url "$srcdir/ELFIO"
+  git config submodule.src/runtime_src/core/common/gsl.url "$srcdir/GSL"
+  git config submodule.src/runtime_src/core/common/aiebu.url "$srcdir/aiebu"
+  git config submodule.src/runtime_src/aie-rt.url "$srcdir/aie-rt"
+  git -c protocol.file.allow=always submodule update
+
+  cd "src/runtime_src/core/common/aiebu"
+  git submodule init
+  git config submodule.lib/aie-rt.url "$srcdir/aie-rt"
+  git config submodule.src/cpp/ELFIO.url "$srcdir/ELFIO"
+  git -c protocol.file.allow=always submodule update
+}
+
+pkgver() {
+  cd "${_pkgname}"
+  ( set -o pipefail
+    git describe --long --abbrev=7 2>/dev/null | sed 's/\([^-]*-g\)/r\1/;s/-/./g' ||
+    printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+  )
+}
+
+build() {
+  local cmake_options=(
+    -B build_xrt_npu
+    -S "${_pkgname}/xrt"
+    -W no-dev
+    -D CMAKE_BUILD_TYPE=Release
+    -D CMAKE_INSTALL_PREFIX=/opt/xilinx
+    -D XRT_SOURCE_DIR="$(realpath ${_pkgname}/xrt/src)"
+    -D XDP_CLIENT_BUILD_CMAKE=yes
+    -D XRT_NPU=1
+    -D XRT_ALVEO=0
+  )
+
+  cmake "${cmake_options[@]}"
+  cmake --build build_xrt_npu
+
+  local cmake_options=(
+    -B build_xdna_driver
+    -S "${_pkgname}"
+    -W no-dev
+    -D CMAKE_BUILD_TYPE=Release
+    -D CMAKE_INSTALL_PREFIX=/opt/xilinx
+    -D XRT_BINARY_DIR=/opt/xilinx
+    -D XRT_INSTALL_PREFIX=/opt/xilinx
+    -D XDP_CLIENT_BUILD_CMAKE=yes
+    -D XRT_NPU=1
+    -D XRT_ALVEO=0
+  )
+
+  cmake "${cmake_options[@]}"
+  cmake --build build_xdna_driver
+
+  local DOWNLOAD_BINS_DIR=./amdxdna_bins
+  local firmware_dir=${DOWNLOAD_BINS_DIR}/firmware
+  local XBUTIL_VALIDATE_BINS_DIR=$DOWNLOAD_BINS_DIR/download_raw/xbutil_validate/bins
+
+  mkdir -p "./${firmware_dir}"/{1502_00,17f0_00,17f0_10,17f0_11}
+  cp npu.sbin.1.5.4.389 "${firmware_dir}/1502_00/npu.sbin"
+  cp npu.sbin.0.7.22.185 "${firmware_dir}/17f0_00/npu.sbin"
+  cp npu.sbin.1.0.4.73 "${firmware_dir}/17f0_10/npu.sbin"
+  cp npu.sbin.1.0.4.180 "${firmware_dir}/17f0_11/npu.sbin"
+
+  mkdir -p $XBUTIL_VALIDATE_BINS_DIR
+  cp -r "${_pkgname}"/tools/bins/* $XBUTIL_VALIDATE_BINS_DIR
+}
+
+package_xrt-npu-git() {
+  provides=('xrt-npu')
+  DESTDIR="$pkgdir" cmake --install build_xrt_npu --component npu
+}
+
+package_xrt-amdxdna-driver-git() {
+  depends=('dkms' 'xrt-npu')
+  provides=('amdxdna-driver' 'xrt-amdxdna-driver' 'xrt-amdxdna')
+  install="xrt_plugin-amdxdna.install"
+  DESTDIR="$pkgdir" cmake  --install build_xdna_driver --component amdxdna
+  install -Dm644 "build_xdna_driver/src/driver/dkms.conf" "${pkgdir}/usr/src/xrt-amdxdna-2.19.0/dkms.conf"
+
+  cd "$pkgdir"
+  mkdir -p usr/lib 2> /dev/null; mv lib/* usr/lib; rm -rf lib
+}
